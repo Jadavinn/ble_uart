@@ -3,6 +3,9 @@
 
 <head>
   <meta charset="UTF-8">
+  <meta http-equiv="Cache-Control" content="no-store, no-cache, must-revalidate, max-age=0">
+  <meta http-equiv="Pragma" content="no-cache">
+  <meta http-equiv="Expires" content="0">
   <title>BLE Text Sender</title>
   <style>
     body {
@@ -52,7 +55,8 @@
 
 <body>
   <h2>Відправка тексту на nRF52840</h2>
-  <textarea id="editor" placeholder="Введіть або вставте сюди ваш текст (до ~28 000 символів)..."></textarea>
+  <textarea id="editor" placeholder="Введіть або вставте сюди ваш текст (до ~28 000 символів)..." autocomplete="off"
+    autocorrect="off" autocapitalize="off" spellcheck="false"></textarea>
   <div class="controls">
     <div>
       <button id="connectBtn">1. Підключитись до плати</button>
@@ -75,6 +79,21 @@
     const status = document.getElementById('status');
     const connectBtn = document.getElementById('connectBtn');
     const sendBtn = document.getElementById('sendBtn');
+
+    function wipeEditor() {
+      if (editor) {
+        editor.value = '0'.repeat(editor.value.length); // Перезаписуємо нулями в пам'яті
+        editor.value = '';
+      }
+    }
+
+    // Очищення при закритті або перезавантаженні вкладки
+    window.addEventListener('beforeunload', () => {
+      wipeEditor();
+      if (bluetoothDevice && bluetoothDevice.gatt.connected) {
+        bluetoothDevice.gatt.disconnect();
+      }
+    });
 
     editor.addEventListener('input', () => {
       const bytes = new TextEncoder().encode(editor.value).length;
@@ -99,7 +118,7 @@
       try {
         status.textContent = 'Статус: Пошук пристрою...';
         const selectedDevice = await navigator.bluetooth.requestDevice({
-          filters: [{ services: [NUS_SERVICE] }]
+          filters: [{services: [NUS_SERVICE]}]
         });
 
         // Підписуємося на подію розриву зв'язку
