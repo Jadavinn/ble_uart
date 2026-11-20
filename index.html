@@ -1,0 +1,172 @@
+<!DOCTYPE html>
+<html lang="uk">
+
+<head>
+  <meta charset="UTF-8">
+  <title>BLE Text Sender</title>
+  <style>
+    body {
+      font-family: -apple-system, sans-serif;
+      max-width: 800px;
+      margin: 30px auto;
+      padding: 0 20px;
+    }
+
+    textarea {
+      width: 100%;
+      height: 400px;
+      font-size: 15px;
+      padding: 12px;
+      box-sizing: border-box;
+      font-family: monospace;
+    }
+
+    .controls {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-top: 12px;
+    }
+
+    button {
+      padding: 10px 20px;
+      font-size: 15px;
+      cursor: pointer;
+      border-radius: 6px;
+      border: none;
+      background: #007AFF;
+      color: white;
+    }
+
+    button:disabled {
+      background: #ccc;
+      cursor: not-allowed;
+    }
+
+    #status {
+      font-weight: bold;
+      color: #333;
+    }
+  </style>
+</head>
+
+<body>
+  <h2>Відправка тексту на nRF52840</h2>
+  <textarea id="editor" placeholder="Введіть або вставте сюди ваш текст (до ~28 000 символів)..."></textarea>
+  <div class="controls">
+    <div>
+      <button id="connectBtn">1. Підключитись до плати</button>
+      <button id="sendBtn" disabled>2. Відправити текст</button>
+    </div>
+    <span id="counter">0 байт</span>
+  </div>
+  <p id="status">Статус: Не підключено</p>
+
+  <script>
+    const NUS_SERVICE = '6e400001-b5a3-f393-e0a9-e50e24dcca9e';
+    const NUS_RX_CHAR = '6e400002-b5a3-f393-e0a9-e50e24dcca9e';
+    const NUS_TX_CHAR = '6e400003-b5a3-f393-e0a9-e50e24dcca9e'; // Додано відсутню константу
+
+    let activeDevice = null;
+    let rxCharacteristic = null;
+
+    const editor = document.getElementById('editor');
+    const counter = document.getElementById('counter');
+    const status = document.getElementById('status');
+    const connectBtn = document.getElementById('connectBtn');
+    const sendBtn = document.getElementById('sendBtn');
+
+    editor.addEventListener('input', () => {
+      const bytes = new TextEncoder().encode(editor.value).length;
+      counter.textContent = `${bytes} / 212992 байт`; // Оновлено під ваш новий розділ 500 КБ
+    });
+
+    // Обробник реального відключення пристрою (наприклад, при вимкненні плати)
+    function onDisconnected() {
+      rxCharacteristic = null;
+      sendBtn.disabled = true;
+      connectBtn.textContent = 'Підключитися';
+      status.textContent = 'Статус: Пристрій відключено';
+    }
+
+    connectBtn.addEventListener('click', async () => {
+      // Якщо вже підключені — пропонуємо відключитися замість повторного пошуку
+      if (activeDevice && activeDevice.gatt.connected) {
+        activeDevice.gatt.disconnect();
+        return;
+      }
+
+      try {
+        status.textContent = 'Статус: Пошук пристрою...';
+        const selectedDevice = await navigator.bluetooth.requestDevice({
+          filters: [{ services: [NUS_SERVICE] }]
+        });
+
+        // Підписуємося на подію розриву зв'язку
+        selectedDevice.removeEventListener('gattserverdisconnected', onDisconnected);
+        selectedDevice.addEventListener('gattserverdisconnected', onDisconnected);
+
+        status.textContent = 'Статус: Підключення GATT...';
+        const server = await selectedDevice.gatt.connect();
+        const service = await server.getPrimaryService(NUS_SERVICE);
+
+        rxCharacteristic = await service.getCharacteristic(NUS_RX_CHAR);
+        const txCharacteristic = await service.getCharacteristic(NUS_TX_CHAR);
+
+        status.textContent = 'Статус: Очікування введення PIN-коду...';
+        await txCharacteristic.startNotifications();
+
+        activeDevice = selectedDevice;
+        status.textContent = `Статус: Підключено до ${activeDevice.name}!`;
+        connectBtn.textContent = 'Відключитися';
+        sendBtn.disabled = false;
+
+      } catch (err) {
+        // Якщо користувач просто закрив вікно вибору пристрою (Cancel)
+        if (err.name === 'NotFoundError') {
+          if (activeDevice && activeDevice.gatt.connected) {
+            status.textContent = `Статус: Підключено до ${activeDevice.name}!`;
+            sendBtn.disabled = false;
+          } else {
+            status.textContent = 'Статус: Вибір пристрою скасовано';
+          }
+          return;
+        }
+
+        // Для всіх інших реальних помилок
+        status.textContent = 'Помилка: ' + err.message;
+        sendBtn.disabled = true;
+      }
+    });
+
+    sendBtn.addEventListener('click', async () => {
+      if (!rxCharacteristic || !activeDevice?.gatt.connected) {
+        status.textContent = 'Помилка: Немає активного з’єднання';
+        sendBtn.disabled = true;
+        return;
+      }
+
+      const encoder = new TextEncoder();
+      const data = encoder.encode(editor.value);
+      const chunkSize = 240;
+
+      sendBtn.disabled = true;
+      try {
+        for (let i = 0; i < data.length; i += chunkSize) {
+          const chunk = data.slice(i, i + chunkSize);
+          await rxCharacteristic.writeValueWithResponse(chunk);
+          status.textContent = `Відправка: ${Math.round(((i + chunk.length) / data.length) * 100)}%`;
+        }
+        status.textContent = `Готово! Відправлено ${data.length} байт.`;
+      } catch (err) {
+        status.textContent = `Помилка передачі: ${err.message}`;
+      } finally {
+        if (activeDevice && activeDevice.gatt.connected) {
+          sendBtn.disabled = false;
+        }
+      }
+    });
+  </script>
+</body>
+
+</html>
